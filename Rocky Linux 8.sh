@@ -17,6 +17,20 @@ VNC_PASSWORD="369369"
 # Đặt tên người dùng mà bạn muốn cài đặt VNC Server. RẤT QUAN TRỌNG: Thay thế 'your_existing_username' bằng tên người dùng thực tế.
 VNC_USER="your_existing_username" 
 
+# --- 0. Cài đặt EPEL repository và gói 'expect' (Ưu tiên làm trước) ---
+echo -e "\n--- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' ---"
+# Cài đặt EPEL repository (thường cần cho các gói và phụ thuộc bổ sung như p7zip)
+if dnf install -y epel-release expect; then
+    echo "Thành công: EPEL repository và gói 'expect' đã được cài đặt."
+    echo "Làm sạch và làm mới cache DNF để đảm bảo các gói EPEL được nhận diện."
+    dnf clean all
+    dnf makecache
+else
+    echo "Lỗi: Không thể cài đặt EPEL repository hoặc gói 'expect'. Vui lòng kiểm tra kết nối mạng hoặc các repository."
+    exit 1
+fi
+
+
 # --- 1. Cập nhật phần mềm hệ thống ---
 echo -e "\n--- BƯỚC 1: Cập nhật phần mềm hệ thống ---"
 if dnf update -y; then
@@ -28,23 +42,16 @@ fi
 
 # --- 2. Cài đặt 7zip và các plugin ---
 echo -e "\n--- BƯỚC 2: Cài đặt 7zip và các plugin ---"
+# Gói p7zip và p7zip-plugins thường có trong EPEL, nên việc cài EPEL trước là quan trọng.
 if dnf install -y p7zip p7zip-plugins; then
     echo "Thành công: 7zip và các plugin đã được cài đặt."
 else
-    echo "Lỗi: Không thể cài đặt 7zip và các plugin."
+    echo "Lỗi: Không thể cài đặt 7zip và các plugin. Có thể do gói không có sẵn hoặc repository không hoạt động."
     exit 1
 fi
 
 # --- 3. Cài đặt giao diện người dùng (GUI - GNOME Desktop) ---
 echo -e "\n--- BƯỚC 3: Cài đặt giao diện người dùng (GNOME Desktop) ---"
-# Cài đặt EPEL repository (thường cần cho các gói và phụ thuộc bổ sung)
-if dnf install -y epel-release expect; then
-    echo "Thành công: EPEL repository và gói 'expect' đã được cài đặt."
-else
-    echo "Lỗi: Không thể cài đặt EPEL repository hoặc gói 'expect'."
-    exit 1
-fi
-
 if dnf groupinstall -y "Server with GUI"; then
     echo "Thành công: Giao diện người dùng (GNOME Desktop) đã được cài đặt."
     echo "Thiết lập GNOME làm môi trường mặc định sau khi khởi động."
@@ -79,12 +86,14 @@ chown $VNC_USER:$VNC_USER /home/$VNC_USER/.vnc
 # Sử dụng 'expect' để tự động đặt mật khẩu VNC
 echo "Tự động thiết lập mật khẩu VNC cho người dùng '$VNC_USER' (Mật khẩu: '$VNC_PASSWORD')..."
 expect -c "
+    set timeout 10
     spawn su - $VNC_USER -c \"vncpasswd\"
-    expect \"Password:\"
-    send \"$VNC_PASSWORD\r\"
-    expect \"Verify:\"
-    send \"$VNC_PASSWORD\r\"
-    expect eof
+    expect {
+        \"Password:\" { send \"$VNC_PASSWORD\r\"; exp_continue }
+        \"Verify:\" { send \"$VNC_PASSWORD\r\" }
+        timeout { puts \"Timeout while setting VNC password. Is vncpasswd installed or user locked?\"; exit 1 }
+        eof { }
+    }
 "
 if [ $? -eq 0 ]; then
     echo "Thành công: Mật khẩu VNC đã được thiết lập."
