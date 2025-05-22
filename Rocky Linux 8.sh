@@ -2,7 +2,7 @@
 #
 # Script cài đặt giao diện người dùng và VNC Server trên Rocky Linux 8
 # Tạo bởi AI Assistant - 2025
-# Phiên bản: 1.1
+# Phiên bản: 1.2
 #
 
 # Thiết lập màu cho output
@@ -30,9 +30,10 @@ print_error() {
 check_command() {
     if [ $? -ne 0 ]; then
         print_error "$1"
-        exit 1
+        return 1
     else
         print_message "$2"
+        return 0
     fi
 }
 
@@ -92,29 +93,9 @@ print_message "7. Thiết lập mật khẩu VNC..."
 mkdir -p /home/vncuser/.vnc
 check_command "Không thể tạo thư mục VNC." "Đã tạo thư mục VNC."
 
-# Sử dụng expect để tự động nhập mật khẩu VNC
-if ! command -v expect &>/dev/null; then
-    print_message "Đang cài đặt expect..."
-    dnf -y install expect
-    check_command "Không thể cài đặt expect." "Đã cài đặt expect."
-fi
-
-# Tạo script expect để tự động nhập mật khẩu
-cat > /tmp/vnc_passwd.exp << EOF
-#!/usr/bin/expect -f
-spawn vncpasswd /home/vncuser/.vnc/passwd
-expect "Password:"
-send "369369\r"
-expect "Verify:"
-send "369369\r"
-expect "Would you like to enter a view-only password (y/n)?"
-send "n\r"
-expect eof
-EOF
-
-chmod +x /tmp/vnc_passwd.exp
-/tmp/vnc_passwd.exp
-rm -f /tmp/vnc_passwd.exp
+# Tạo mật khẩu VNC bằng cách trực tiếp (không sử dụng expect)
+echo "369369" | vncpasswd -f > /home/vncuser/.vnc/passwd
+check_command "Không thể thiết lập mật khẩu VNC." "Đã thiết lập mật khẩu VNC."
 
 chmod 600 /home/vncuser/.vnc/passwd
 chown -R vncuser:vncuser /home/vncuser/.vnc
@@ -143,8 +124,21 @@ cat > /etc/tigervnc/vncserver.users << EOF
 EOF
 check_command "Không thể tạo file cấu hình người dùng VNC." "Đã tạo file cấu hình người dùng VNC."
 
-# 10. Tạo service file cho VNC trên cổng 5900
-print_message "10. Tạo service file cho VNC..."
+# 10. Tạo xstartup file cho VNC
+print_message "10. Tạo xstartup file cho VNC..."
+cat > /home/vncuser/.vnc/xstartup << EOF
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+exec /etc/X11/xinit/xinitrc
+EOF
+
+chmod +x /home/vncuser/.vnc/xstartup
+chown vncuser:vncuser /home/vncuser/.vnc/xstartup
+check_command "Không thể tạo xstartup file cho VNC." "Đã tạo xstartup file cho VNC."
+
+# 11. Tạo service file cho VNC trên cổng 5900
+print_message "11. Tạo service file cho VNC..."
 cat > /etc/systemd/system/vncserver@\:0.service << EOF
 [Unit]
 Description=Remote desktop service (VNC) on port 5900
@@ -166,16 +160,43 @@ WantedBy=multi-user.target
 EOF
 check_command "Không thể tạo service file cho VNC." "Đã tạo service file cho VNC."
 
-# 11. Khởi động và kích hoạt VNC service
-print_message "11. Khởi động và kích hoạt VNC service..."
+# 12. Khởi động và kích hoạt VNC service
+print_message "12. Khởi động và kích hoạt VNC service..."
 systemctl daemon-reload
+
+# Đảm bảo vncuser có home directory và quyền đầy đủ
+print_message "Kiểm tra và cấp quyền cho thư mục home của vncuser..."
+chown -R vncuser:vncuser /home/vncuser
+chmod 755 /home/vncuser
+
+# Cài đặt thêm các gói cần thiết
+print_message "Cài đặt các gói phụ thuộc bổ sung..."
+dnf -y install xorg-x11-fonts-Type1 xorg-x11-fonts-misc
+check_command "Không thể cài đặt các gói phụ thuộc bổ sung." "Đã cài đặt các gói phụ thuộc bổ sung."
+
+# Kích hoạt dịch vụ
+print_message "Kích hoạt dịch vụ VNC..."
 systemctl enable vncserver@:0.service
 check_command "Không thể kích hoạt VNC service." "Đã kích hoạt VNC service."
 
-systemctl start vncserver@:0.service
-check_command "Không thể khởi động VNC service. Kiểm tra log với 'journalctl -u vncserver@:0.service'" "Đã khởi động VNC service."
+# Khởi động dịch vụ với quyền của người dùng vncuser
+print_message "Khởi động dịch vụ VNC..."
+su - vncuser -c "vncserver :0 -geometry 1024x768 -depth 24"
+if [ $? -ne 0 ]; then
+    print_error "Không thể khởi động VNC service trực tiếp. Đang thử phương pháp khác..."
+    systemctl start vncserver@:0.service
+    if [ $? -ne 0 ]; then
+        print_error "Không thể khởi động VNC service. Xem log với 'journalctl -u vncserver@:0.service'"
+        print_message "Đang hiển thị log lỗi..."
+        journalctl -u vncserver@:0.service --no-pager | tail -n 20
+    else
+        print_message "Đã khởi động VNC service thành công qua systemctl."
+    fi
+else
+    print_message "Đã khởi động VNC service thành công qua vncserver trực tiếp."
+fi
 
-# 12. Hiển thị thông tin kết nối
+# 13. Hiển thị thông tin kết nối
 echo "==================================================================="
 echo "   Cài đặt GUI và VNC Server hoàn tất!"
 echo "==================================================================="
@@ -194,7 +215,11 @@ fi
 
 echo "Địa chỉ IP: $IP_ADDRESS"
 echo ""
-echo "Để kết nối, sử dụng một VNC Viewer và nhập: $IP_ADDRESS:5900"
+echo "Để kết nối, sử dụng một VNC Viewer và nhập: $IP_ADDRESS:0"
+echo ""
+echo "Kiểm tra trạng thái VNC server với lệnh:"
+echo "  - ps -ef | grep vnc"
+echo "  - netstat -tulpn | grep 590"
 echo ""
 echo "Lưu ý: Vui lòng thay đổi mật khẩu mặc định sau khi cài đặt để đảm bảo tính bảo mật."
 echo "==================================================================="
