@@ -2,6 +2,7 @@
 
 # Tên script: rocky_linux_auto_setup.sh
 # Mô tả: Script tự động cài đặt và cấu hình Rocky Linux 8 với GUI, 7zip và VNC Server.
+# Phiên bản: 3.0 (Cập nhật mới nhất, tối ưu hóa xử lý lỗi DNF và EPEL)
 
 # Kiểm tra quyền root
 if [[ $EUID -ne 0 ]]; then
@@ -15,30 +16,42 @@ echo "Bắt đầu quá trình cài đặt và cấu hình Rocky Linux 8..."
 # Đặt mật khẩu VNC mặc định. LƯU Ý: Không an toàn khi sử dụng trong môi trường sản xuất.
 VNC_PASSWORD="369369"
 # Đặt tên người dùng mà bạn muốn cài đặt VNC Server. RẤT QUAN TRỌNG: Thay thế 'your_existing_username' bằng tên người dùng thực tế.
-VNC_USER="your_existing_username" 
+VNC_USER="your_existing_username"
 
-# --- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' ---
-echo -e "\n--- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' và làm mới DNF cache ---"
-# Cài đặt EPEL repository và gói 'expect'
-if ! dnf install -y epel-release expect; then
-    echo "Lỗi: Không thể cài đặt EPEL repository hoặc gói 'expect'. Vui lòng kiểm tra kết nối mạng hoặc các repository."
-    exit 1
-fi
+# --- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' (Ưu tiên làm trước mọi cài đặt khác) ---
+echo -e "\n--- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' ---"
+echo "Đảm bảo các repository cần thiết được kích hoạt và DNF cache được làm mới."
 
-# Làm sạch và làm mới cache DNF sau khi thêm EPEL. Thử lại nhiều lần nếu cần.
-echo "Đảm bảo DNF cache được làm mới hoàn toàn sau khi cài EPEL..."
-for i in {1..3}; do # Thử 3 lần
-    dnf clean all && dnf makecache --timer
+# Cài đặt EPEL release. Thử lại nếu thất bại.
+for i in {1..3}; do
+    if dnf install -y epel-release expect; then
+        echo "Thành công: EPEL repository và gói 'expect' đã được cài đặt."
+        break
+    else
+        echo "Cảnh báo: Không thể cài đặt EPEL repository hoặc gói 'expect'. Thử lại sau 5 giây... ($i/3)"
+        sleep 5
+    fi
+    if [ $i -eq 3 ]; then
+        echo "Lỗi nghiêm trọng: Không thể cài đặt EPEL repository hoặc gói 'expect' sau nhiều lần thử. Không thể tiếp tục cài đặt."
+        exit 1
+    fi
+done
+
+# Làm sạch và làm mới cache DNF sau khi thêm EPEL. Thử lại nhiều lần để đảm bảo metadata cập nhật.
+echo "Làm sạch và làm mới DNF cache để nhận diện các gói từ EPEL..."
+for i in {1..3}; do
+    dnf clean all &> /dev/null # Làm sạch cache, ẩn output
+    dnf makecache --timer &> /dev/null # Tạo lại cache, ẩn output
     if [ $? -eq 0 ]; then
-        echo "Thành công: DNF cache đã được làm mới. ($i/3)"
+        echo "Thành công: DNF cache đã được làm mới hoàn toàn. ($i/3)"
         break
     else
         echo "Cảnh báo: Lỗi làm mới DNF cache. Thử lại sau 5 giây... ($i/3)"
         sleep 5
     fi
     if [ $i -eq 3 ]; then
-        echo "Lỗi nghiêm trọng: Không thể làm mới DNF cache sau nhiều lần thử. Không thể tiếp tục cài đặt."
-        exit 1
+        echo "Lỗi nghiêm trọng: Không thể làm mới DNF cache sau nhiều lần thử. Các cài đặt gói có thể thất bại."
+        # Không exit ở đây để các bước sau có thể tự kiểm tra, nhưng thông báo rõ ràng.
     fi
 done
 
@@ -54,13 +67,13 @@ fi
 
 # --- BƯỚC 2: Cài đặt 7zip và các plugin ---
 echo -e "\n--- BƯỚC 2: Cài đặt 7zip và các plugin ---"
-# Gói p7zip và p7zip-plugins thường có trong EPEL.
+# Các gói này thường có trong EPEL, việc cài EPEL trước đó là rất quan trọng.
 echo "Đang thử cài đặt p7zip và p7zip-plugins..."
 if dnf install -y p7zip p7zip-plugins; then
     echo "Thành công: 7zip và các plugin đã được cài đặt."
 else
     echo "Lỗi: Không thể cài đặt 7zip và các plugin."
-    echo "Các nguyên nhân có thể: Gói không có sẵn trong các repository được kích hoạt (kể cả EPEL), hoặc lỗi kết nối mirror."
+    echo "Các nguyên nhân có thể: Gói không có sẵn trong các repository đã kích hoạt (bao gồm EPEL), hoặc lỗi kết nối mirror."
     echo "Vui lòng kiểm tra thủ công bằng lệnh: 'sudo dnf repolist epel' và 'sudo dnf search p7zip'."
     exit 1
 fi
@@ -89,7 +102,7 @@ fi
 echo "Kiểm tra người dùng VNC: '$VNC_USER'..."
 if ! id -u "$VNC_USER" >/dev/null 2>&1; then
     echo "Lỗi: Người dùng '$VNC_USER' không tồn tại trên hệ thống."
-    echo "Vui lòng THAY THẾ biến 'VNC_USER' trong script bằng tên người dùng hiện có hoặc tạo người dùng mới trước khi chạy lại script."
+    echo "Vui lòng **THAY THẾ** biến 'VNC_USER' trong script bằng tên người dùng hiện có hoặc tạo người dùng mới trước khi chạy lại script."
     exit 1
 fi
 
@@ -106,7 +119,7 @@ expect -c "
     expect {
         \"Password:\" { send \"$VNC_PASSWORD\\r\"; exp_continue }
         \"Verify:\" { send \"$VNC_PASSWORD\\r\"; exp_continue }
-        \"Would you like to enter a view-only password (y/n)?\" { send \"n\\r\" }
+        \"Would you like to enter a view-only password (y/n)?\" { send \"n\\r\"; exp_continue }
         timeout { puts \"Timeout while setting VNC password. Is vncpasswd installed or user locked?\"; exit 1 }
         eof { }
     }
