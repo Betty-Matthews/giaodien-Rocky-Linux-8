@@ -17,21 +17,33 @@ VNC_PASSWORD="369369"
 # Đặt tên người dùng mà bạn muốn cài đặt VNC Server. RẤT QUAN TRỌNG: Thay thế 'your_existing_username' bằng tên người dùng thực tế.
 VNC_USER="your_existing_username" 
 
-# --- 0. Cài đặt EPEL repository và gói 'expect' (Ưu tiên làm trước) ---
-echo -e "\n--- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' ---"
-# Cài đặt EPEL repository (thường cần cho các gói và phụ thuộc bổ sung như p7zip)
-if dnf install -y epel-release expect; then
-    echo "Thành công: EPEL repository và gói 'expect' đã được cài đặt."
-    echo "Làm sạch và làm mới cache DNF để đảm bảo các gói EPEL được nhận diện."
-    dnf clean all
-    dnf makecache
-else
+# --- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' ---
+echo -e "\n--- BƯỚC 0: Cài đặt EPEL repository và gói 'expect' và làm mới DNF cache ---"
+# Cài đặt EPEL repository và gói 'expect'
+if ! dnf install -y epel-release expect; then
     echo "Lỗi: Không thể cài đặt EPEL repository hoặc gói 'expect'. Vui lòng kiểm tra kết nối mạng hoặc các repository."
     exit 1
 fi
 
+# Làm sạch và làm mới cache DNF sau khi thêm EPEL. Thử lại nhiều lần nếu cần.
+echo "Đảm bảo DNF cache được làm mới hoàn toàn sau khi cài EPEL..."
+for i in {1..3}; do # Thử 3 lần
+    dnf clean all && dnf makecache --timer
+    if [ $? -eq 0 ]; then
+        echo "Thành công: DNF cache đã được làm mới. ($i/3)"
+        break
+    else
+        echo "Cảnh báo: Lỗi làm mới DNF cache. Thử lại sau 5 giây... ($i/3)"
+        sleep 5
+    fi
+    if [ $i -eq 3 ]; then
+        echo "Lỗi nghiêm trọng: Không thể làm mới DNF cache sau nhiều lần thử. Không thể tiếp tục cài đặt."
+        exit 1
+    fi
+done
 
-# --- 1. Cập nhật phần mềm hệ thống ---
+
+# --- BƯỚC 1: Cập nhật phần mềm hệ thống ---
 echo -e "\n--- BƯỚC 1: Cập nhật phần mềm hệ thống ---"
 if dnf update -y; then
     echo "Thành công: Hệ thống đã được cập nhật."
@@ -40,17 +52,20 @@ else
     exit 1
 fi
 
-# --- 2. Cài đặt 7zip và các plugin ---
+# --- BƯỚC 2: Cài đặt 7zip và các plugin ---
 echo -e "\n--- BƯỚC 2: Cài đặt 7zip và các plugin ---"
-# Gói p7zip và p7zip-plugins thường có trong EPEL, nên việc cài EPEL trước là quan trọng.
+# Gói p7zip và p7zip-plugins thường có trong EPEL.
+echo "Đang thử cài đặt p7zip và p7zip-plugins..."
 if dnf install -y p7zip p7zip-plugins; then
     echo "Thành công: 7zip và các plugin đã được cài đặt."
 else
-    echo "Lỗi: Không thể cài đặt 7zip và các plugin. Có thể do gói không có sẵn hoặc repository không hoạt động."
+    echo "Lỗi: Không thể cài đặt 7zip và các plugin."
+    echo "Các nguyên nhân có thể: Gói không có sẵn trong các repository được kích hoạt (kể cả EPEL), hoặc lỗi kết nối mirror."
+    echo "Vui lòng kiểm tra thủ công bằng lệnh: 'sudo dnf repolist epel' và 'sudo dnf search p7zip'."
     exit 1
 fi
 
-# --- 3. Cài đặt giao diện người dùng (GUI - GNOME Desktop) ---
+# --- BƯỚC 3: Cài đặt giao diện người dùng (GUI - GNOME Desktop) ---
 echo -e "\n--- BƯỚC 3: Cài đặt giao diện người dùng (GNOME Desktop) ---"
 if dnf groupinstall -y "Server with GUI"; then
     echo "Thành công: Giao diện người dùng (GNOME Desktop) đã được cài đặt."
@@ -61,7 +76,7 @@ else
     exit 1
 fi
 
-# --- 4. Cài đặt và cấu hình VNC Server để điều khiển từ xa ---
+# --- BƯỚC 4: Cài đặt và cấu hình VNC Server để điều khiển từ xa ---
 echo -e "\n--- BƯỚC 4: Cài đặt và cấu hình VNC Server ---"
 if dnf install -y tigervnc-server; then
     echo "Thành công: TigerVNC Server đã được cài đặt."
@@ -89,8 +104,9 @@ expect -c "
     set timeout 10
     spawn su - $VNC_USER -c \"vncpasswd\"
     expect {
-        \"Password:\" { send \"$VNC_PASSWORD\r\"; exp_continue }
-        \"Verify:\" { send \"$VNC_PASSWORD\r\" }
+        \"Password:\" { send \"$VNC_PASSWORD\\r\"; exp_continue }
+        \"Verify:\" { send \"$VNC_PASSWORD\\r\"; exp_continue }
+        \"Would you like to enter a view-only password (y/n)?\" { send \"n\\r\" }
         timeout { puts \"Timeout while setting VNC password. Is vncpasswd installed or user locked?\"; exit 1 }
         eof { }
     }
